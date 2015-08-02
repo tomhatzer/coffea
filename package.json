@@ -29,11 +29,15 @@
     "url": "https://github.com/caffeinery/coffea/issues"
   },
   "dependencies": {
+    "debug": "^2.2.0",
     "eventemitter3": "1.1.x",
+    "fs-readdir-recursive": "^0.1.2",
     "fusing": "1.0.x",
+    "harmony-reflect": "^1.4.0",
     "irc-replies": "2.0.x",
     "limiter": "1.0.x",
     "linewise": "0.0.3",
+    "readdirp": "^1.4.0",
     "underscore": "1.8.x"
   },
   "devDependencies": {

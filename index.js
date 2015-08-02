@@ -1,8 +1,9 @@
 /*jslint node: true*/
 "use strict";
 
+var debug = require('debug')('core');
+
 var EventEmitter = require('eventemitter3');
-var Parser = require('./lib/parser');
 var net = require('net');
 var tls = require('tls');
 var fs = require('fs');
@@ -10,7 +11,11 @@ var replies = require('irc-replies');
 var StreamReadable = require('stream').Readable;
 var StreamWritable = require('stream').Writable;
 var utils = require('./lib/utils');
-var RateLimiter = require('limiter').RateLimiter;
+var debugStream = require('debug')('stream');
+var debugPlugin = require('debug')('plugin');
+var read = require('fs-readdir-recursive');
+require('harmony-reflect'); // Proxy polyfill
+var methodMissing = require('./methodMissing');
 
 /**
  * Client constructor
@@ -34,12 +39,18 @@ function Client(info, throttling) {
         this.version = pkg.version;
     } catch (err) { }
 
+    debug("init coffea" + (this.version ? " v" + this.version : ""));
+
     this.streams = {};
-    this.stinfo = {};
+    this.protocols = {};
+
+    this.utils = utils;
+
     this.networked_me = {};
     this.capabilities = [];
 
-    this._loadPlugins();
+    this.loadPlugin(__dirname + '/lib/irc/index.js');
+    debug("irc plugins loaded");
 
     if (typeof info === 'boolean') {
         throttling = info;
@@ -54,6 +65,8 @@ function Client(info, throttling) {
         // compatibility
         this.add(info);
     }
+
+    return methodMissing(this);
 }
 
 // expose client
@@ -62,58 +75,52 @@ module.exports = Client;
 // inherit from Emitter.prototype to make Client and EventEmitter
 utils.inherit(Client, EventEmitter);
 
-/**
- * Internal function that loads all plugins
- * Later this should be replaced with a plugin manager
- *
- * @api private
- */
-Client.prototype._loadPlugins = function() {
-    var _this = this;
-    var files = fs.readdirSync(__dirname + '/lib/plugins/');
-    files.forEach(function (file) {
-        if (file.substr(-3, 3) === '.js') {
-            // console.log('Loading plugin', file);
-            _this.use(require(__dirname + '/lib/plugins/' + file)());
-        }
-    });
+Client.prototype._execProtocol = function (protocol, cmd, arg1, arg2, arg3, arg4, arg5) {
+    return this.protocols[protocol][cmd](arg1, arg2, arg3, arg4, arg5); // TODO: use `args...` in ES6
 };
 
-/**
- * Internal function that does a sanity check
- * on the network information, adding defaults
- *
- * @params {Object} network
- * @return {Object} network
- * @api private
- */
-Client.prototype._check = function(network) {
-    var ret = {};
-    var randnick = "coffea"+Math.floor(Math.random() * 100000);
-
-    if (typeof network === 'string') {
-        ret.host = network; // super lazy config - a host was passed as a string
+Client.prototype._parseConfig = function (config) {
+    if (config instanceof Array) {
+        config = config.map(this._parseConfig, this);
     } else {
-        ret.host = network.host === undefined ? null : network.host; // Required.
+        var p;
+        if (typeof config === 'string') {
+            p = config;
+            config = {};
+        } else if (config.host) {
+            p = config.host;
+        }
+        p = p.split('://');
+
+        var protocol = p.length > 1 ? p[0] : undefined;
+        var shortConfig = p[1];
+        if (protocol) {
+            config = this._execProtocol(protocol, 'parse', config, shortConfig);
+            config.protocol = protocol;
+        }
     }
 
-    ret.name = network.name;
+    return config;
+};
 
-    ret.nick = network.nick === undefined ? randnick : network.nick;
-    var port = network.ssl === true ? 6697 : 6667;
-    ret.port = network.port === undefined ? port : network.port;
-    ret.ssl = network.ssl === undefined ? false : network.ssl;
-    ret.ssl_allow_invalid = network.ssl_allow_invalid === undefined ? false : network.ssl_allow_invalid;
-    ret.username = network.username === undefined ? ret.nick : network.username;
-    ret.realname = network.realname === undefined ? ret.nick : network.realname;
-    ret.pass = network.pass;
+Client.prototype._runConfig = function (config) {
+    if (config instanceof Array) {
+        config = config.map(this._runConfig, this);
+    } else {
+        var protocol = config.protocol;
+        if (!this.protocols.hasOwnProperty(protocol)) {
+            var errmsg = "invalid protocol '" + protocol + "'";
+            debug("error: %s", errmsg);
+            throw new Error(errmsg);
+        }
+        debug("using protocol '%s' for '%s'", protocol, JSON.stringify(config));
+        var stream = this._execProtocol(protocol, 'setup', config);
+        var id = this._useStream(stream, config);
+        this.connect(id);
+        return id;
+    }
 
-    ret.throttling = network.throttling;
-
-    ret.sasl = network.sasl === undefined? null : network.sasl;
-    ret.nickserv = network.nickserv === undefined? null : network.nickserv;
-
-    return ret;
+    return config;
 };
 
 /**
@@ -125,30 +132,20 @@ Client.prototype._check = function(network) {
  * @return {string} stream_id
  * @api private
  */
-Client.prototype._useStream = function (stream, network, throttling) {
+Client.prototype._useStream = function (stream, info) {
+    var network = info.name;
+
     if (network) { stream.coffea_id = network; } // user-defined stream id
     else { stream.coffea_id = Object.keys(this.streams).length.toString(); } // assign unique id to stream
 
-    stream.setEncoding('utf8'); // set stream encoding
-    throttling = ((throttling === undefined) ? this.throttling : throttling);
+    // set protocol info
+    stream.protocol = info.protocol === undefined ? 'irc' : info.protocol;
 
-    // rate limiting/throttling
-    stream.limiter = new RateLimiter(1, (typeof throttling === 'number') ? throttling : 250, (throttling === false));
-
-    // set up parser
-    var parser = new Parser();
-    var _this = this;
-    parser.on('message', function (msg) {
-        _this.onmessage(msg, stream.coffea_id);
-    });
-    parser.on('end', function() {
-        utils.emit(_this, stream.coffea_id, 'disconnect', {});
-    });
-    stream.pipe(parser);
+    // set stream config/info
+    stream.info = info;
 
     // add stream to client
     this.streams[stream.coffea_id] = stream;
-    this.stinfo[stream.coffea_id] = network;
 
     // return stream id
     return stream.coffea_id;
@@ -156,59 +153,8 @@ Client.prototype._useStream = function (stream, network, throttling) {
 
 /* Depreciated. This is here for compatibility. */
 Client.prototype.useStream = function (stream, network) {
+    console.warn("DEPRECIATED: direct use of useStream is depreciated, please use add() instead");
     this._useStream(stream, network);
-};
-
-/**
- * Reconnects the socket that is assigned to the current stream_id.
- *
- * @params {string} stream_id
- */
-Client.prototype.reconnect = function (stream_id) {
-    var network = this.stinfo[stream_id];
-    var stream = network.ssl ? tls.connect({host: network.host, port: network.port}) : net.connect({host: network.host, port: network.port});
-    this._useStream(stream, stream_id, network.throttling);
-    this._connect(stream_id, network);
-};
-
-/**
- * Internal function to handle incoming messages from the streams
- *
- * @params {string} msg
- * @api private
- */
-Client.prototype.onmessage = function (msg, network) {
-    msg.command = replies[msg.command] || msg.command;
-    utils.emit(this, network, 'data', msg);
-};
-
-Client.prototype._setupSASL = function (stream_id, info) {
-    this.on('cap_ack', function (err, event) {
-        if (event.capability === 'sasl') {
-            this.sasl.mechanism('PLAIN', stream_id);
-            if (info.sasl && info.sasl.account && info.sasl.password) {
-                this.sasl.login(info.sasl.account, info.sasl.password, stream_id);
-            } else if (info.sasl && info.sasl.password) {
-                this.sasl.login(info.username, info.sasl.password, stream_id);
-            } else {
-                this.sasl.login(null, null, stream_id);
-            }
-        }
-    });
-};
-
-Client.prototype._connect = function (stream_id, info) {
-    this._setupSASL(stream_id, info);
-    if (info.pass) { this.pass(info.pass); }
-    this.capReq(['account-notify', 'away-notify', 'extended-join', 'sasl'], stream_id);
-    this.capEnd(stream_id);
-    this.nick(info.nick, stream_id);
-    this.user(info.username, info.realname, stream_id);
-    if (info.nickserv && info.nickserv.username && info.nickserv.password) {
-        this.identify(info.nickserv.username, info.nickserv.password);
-    } else if (info.nickserv && info.nickserv.password) {
-        this.identify(info.nickserv.password);
-    }
 };
 
 /**
@@ -221,98 +167,68 @@ Client.prototype._connect = function (stream_id, info) {
  * @api public
  */
 Client.prototype.add = function (info) {
-    var stream, stream_id, streams = [];
-    var _this = this;
-    if (info instanceof Array) {
-        // We've been passed multiple server information
-        info.forEach(function(network) {
-            network = _this._check(network);
-            if (network.ssl) {
-                stream = tls.connect({
-                    host: network.host,
-                    port: network.port,
-                    rejectUnauthorized: !network.ssl_allow_invalid
-                }, function() {
-                    stream_id = _this._useStream(stream, network.name, network.throttling);
-                    utils.emit(_this, stream_id, 'ssl-error', new utils.SSLError(stream.authorizationError));
-                    _this._connect(stream_id, network);
-                    streams.push(stream_id);
-                });
-            } else {
-                stream = net.connect({host: network.host, port: network.port});
-                stream_id = _this._useStream(stream, network.name, network.throttling);
-                _this._connect(stream_id, network);
-                streams.push(stream_id);
-            }
-        });
-    } else if ((typeof info === 'string') || (info instanceof Object && !(info instanceof StreamReadable) && !(info instanceof StreamWritable))) {
-        // We've been passed single server information
-        info = _this._check(info);
-        if (info.ssl) {
-            stream = tls.connect({
-                host: info.host,
-                port: info.port,
-                rejectUnauthorized: !info.ssl_allow_invalid
-            }, function() {
-                stream_id = _this._useStream(stream, info.name, info.throttling);
-                utils.emit(_this, stream_id, 'ssl-error', new utils.SSLError(stream.authorizationError));
-                _this._connect(stream_id, info);
-            });
-        } else {
-            stream = net.connect({host: info.host, port: info.port});
-            stream_id = _this._useStream(stream, info.name, info.throttling);
-            _this._connect(stream_id, info);
-        }
-    } else {
-        // Assume we've been passed the legacy stream.
-        stream_id = this._useStream(info, null, info.throttling);
-    }
+    debug("add(%s)", JSON.stringify(info));
 
-    if(streams.length === 0) {
-        return stream_id;
+    var config = this._parseConfig(info);
+    debug("parseConfig -> %s", JSON.stringify(config));
+
+    var streams = this._runConfig(config);
+    debug("runConfig -> %s", JSON.stringify(streams));
+
+    if (streams.length === 1) {
+        return streams.pop();
     } else {
         return streams;
     }
 };
 
-/**
- * Write data to a specific network (stream)
- *
- * @params {string} str
- * @params {string} network
- * @params {Function} fn
- * @api public
- */
-Client.prototype.write = function (str, network, fn) {
-    // if network is the callback, then it wasn't defined either
-    if (typeof(network) === 'function') {
-        fn = network;
-        network = undefined;
+Client.prototype._getProtocolData = function (protocol, define) {
+    var p = this.protocols[protocol];
+    if (!p) {
+        if (define) p = this.protocols[protocol] = {};
+        else throw new Error("Invalid protocol '" + protocol + "'");
     }
+    return p;
+};
 
-    // somebody passed the stream, not the id, get id from stream
-    if (network !== null && typeof network === 'object') {
-        network = network.coffea_id;
-    }
+Client.prototype.define = function define(protocol, name, f) {
+    var p = this._getProtocolData(protocol, true);
+    if (!p.functions) p.functions = {};
+    p.functions[name] = f;
+};
 
-    var _this = this;
-    if (network && this.streams.hasOwnProperty(network)) {
-        // send to specified network
-        // this.streams[network].limiter.removeTokens(1, function() {
-            _this.streams[network].write(str + '\r\n', fn);
-        // });
+Client.prototype.buildFunction = function (protocol, name) {
+    var p = this._getProtocolData(protocol);
+    if (!p.functions) p.functions = {};
+
+    var f = p.functions[name];
+    if (!f) throw new Error("Function '" + name + "' not available in protocol '" + protocol + "'");
+
+    return f.bind(this);
+};
+
+Client.prototype.getProtocol = function (stream_id) {
+    var stream = this.streams[stream_id];
+    return stream ? stream.protocol : 'irc';
+};
+
+Client.prototype.__noSuchMethod__ = function (methodName, args) {
+    var originalArgs = args.slice(0);
+    var cb = args.pop();
+    var stream_id;
+    if (typeof cb === "function") {
+        stream_id = args.pop();
     } else {
-        // send to all networks
-        for (var id in this.streams) {
-            if (this.streams.hasOwnProperty(id)) {
-                this.write(str, id);
-            }
-        }
-        if (fn) {
-            fn();
-        }
+        stream_id = cb;
     }
+    var f = this.buildFunction(this.getProtocol(stream_id), methodName);
+    return f.apply(this, originalArgs);
+};
 
+Client.prototype.reconnect = function (stream_id, cb) {
+    return this.disconnect(stream_id, function disconnectedGoingToReconnect() {
+        this.connect(stream_id, cb);
+    });
 };
 
 /**
@@ -325,6 +241,46 @@ Client.prototype.write = function (str, network, fn) {
 Client.prototype.use = function (fn) {
     fn(this);
     return this;
+};
+
+/**
+ * Load a plugin by specifying the full path to the file
+ *
+ * @params {string} path
+ * @api public
+ */
+Client.prototype.loadPlugin = function (path, cb) {
+    debugPlugin("loading plugin '%s'", path.split('/').pop());
+    this.use(require(path)(cb));
+};
+
+/**
+ * Function that loads all plugins from a folder
+ *
+ * @params {string}     path    path to load plugins from
+ * @params {function}   cb      callback executed when plugins are loaded
+ * @api public
+ */
+Client.prototype.loadPlugins = function (path) {
+    var _this = this;
+    debugPlugin("loading plugins from path: %s", path);
+    var plugins = read(path, function (x) {
+        return x[0] !== '.' && x.split('.').pop() === 'js';
+    });
+    plugins.forEach(function (plugin) {
+        _this.loadPlugin(path + '/' + plugin);
+    }); // TODO: use async to wait for all plugins to load here
+};
+
+/**
+ * Internal function to handle incoming messages from the streams
+ *
+ * @params {string} msg
+ * @api private
+ */
+Client.prototype.onmessage = function (msg, network) {
+    msg.command = replies[msg.command] || msg.command;
+    utils.emit(this, network, 'data', msg);
 };
 
 /**
