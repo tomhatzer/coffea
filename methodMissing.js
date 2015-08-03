@@ -7,6 +7,7 @@
  * @return {Object} 
  */
 module.exports = function enableMethodMissing(obj) {
+  // return obj; // uncomment to circumvent v8 bug: https://goo.gl/HxMZ8f
 
   var functionHandler = createBaseHandler({});
   functionHandler.get = function(receiver, name) {

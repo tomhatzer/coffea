@@ -136,6 +136,8 @@ Client.prototype._runConfig = function (config) {
  * @api private
  */
 Client.prototype._useStream = function (stream, info) {
+    if (!info) info = {};
+
     var network = info.name;
 
     if (network) { stream.coffea_id = network; } // user-defined stream id
@@ -170,13 +172,22 @@ Client.prototype.useStream = function (stream, network) {
  * @api public
  */
 Client.prototype.add = function (info) {
-    debug("add(%s)", JSON.stringify(info));
+    var streams = [];
 
-    var config = this._parseConfig(info);
-    debug("parseConfig -> %s", JSON.stringify(config));
+    if ((info instanceof StreamReadable) || (info instanceof StreamWritable)) {
+        debug("add(Stream)");
+        debug("stream passed, using it directly");
+        var stream_id = this._useStream(info, null, info.throttling);
+        streams.push(stream_id);
+    } else {
+        debug("add(%s)", JSON.stringify(info));
 
-    var streams = this._runConfig(config);
-    debug("runConfig -> %s", JSON.stringify(streams));
+        var config = this._parseConfig(info);
+        debug("parseConfig -> %s", JSON.stringify(config));
+
+        streams = this._runConfig(config);
+        debug("runConfig -> %s", JSON.stringify(streams));
+    }
 
     if (streams.length === 1) {
         return streams.pop();
