@@ -92,23 +92,30 @@ Client.prototype._parseConfig = function (config) {
         } else if (config.host) {
             p = config.host;
         }
-        p = p.split('://');
 
-        var protocol = p.length > 1 ? p[0] : undefined;
-        var shortConfig = p[1];
-        if (protocol) {
-            config = this._execProtocol(protocol, 'parse', config, shortConfig);
-            console.log(config);
+        var protocol, shortConfig;
+        if (config.protocol) protocol = config.protocol;
+        else if (p) {
+            p = p.split('://');
+
+            protocol = p.length > 1 ? p[0] : undefined;
+            shortConfig = p[1];
         }
-        config.protocol = protocol ? protocol : 'irc';
+
+        protocol = protocol ? protocol : 'irc';
+
+        config = this._execProtocol(protocol, 'parse', config, shortConfig);
+        config.protocol = protocol;
     }
 
     return config;
 };
 
 Client.prototype._runConfig = function (config) {
+    var streams = [];
     if (config instanceof Array) {
-        config = config.map(this._runConfig, this);
+        streams = config.map(this._runConfig, this);
+        return streams;
     } else {
         var protocol = config.protocol;
         if (!this.protocols.hasOwnProperty(protocol)) {
@@ -122,8 +129,6 @@ Client.prototype._runConfig = function (config) {
         this.connect(id);
         return id;
     }
-
-    return config;
 };
 
 /**
@@ -185,7 +190,7 @@ Client.prototype.add = function (info) {
         var config = this._parseConfig(info);
         debug("parseConfig -> %s", JSON.stringify(config));
 
-        streams = this._runConfig(config);
+        streams = streams.concat(this._runConfig(config));
         debug("runConfig -> %s", JSON.stringify(streams));
     }
 
