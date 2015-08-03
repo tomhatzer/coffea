@@ -2,6 +2,7 @@
 "use strict";
 
 var debug = require('debug')('core');
+var debugR = require('debug')('router');
 
 var EventEmitter = require('eventemitter3');
 var net = require('net');
@@ -11,6 +12,7 @@ var replies = require('irc-replies');
 var StreamReadable = require('stream').Readable;
 var StreamWritable = require('stream').Writable;
 var utils = require('./lib/utils');
+var util = require('util');
 var debugStream = require('debug')('stream');
 var debugPlugin = require('debug')('plugin');
 var read = require('fs-readdir-recursive');
@@ -96,8 +98,9 @@ Client.prototype._parseConfig = function (config) {
         var shortConfig = p[1];
         if (protocol) {
             config = this._execProtocol(protocol, 'parse', config, shortConfig);
-            config.protocol = protocol;
+            console.log(config);
         }
+        config.protocol = protocol ? protocol : 'irc';
     }
 
     return config;
@@ -194,7 +197,7 @@ Client.prototype._getProtocolData = function (protocol, define) {
 Client.prototype.define = function define(protocol, name, f) {
     var p = this._getProtocolData(protocol, true);
     if (!p.functions) p.functions = {};
-    p.functions[name] = f;
+    p.functions[name] = f.bind(this);
 };
 
 Client.prototype.buildFunction = function (protocol, name) {
@@ -213,15 +216,23 @@ Client.prototype.getProtocol = function (stream_id) {
 };
 
 Client.prototype.__noSuchMethod__ = function (methodName, args) {
+    try {
+        debugR('%s(%s)', methodName, args.map(util.inspect).join(', '));
+    } catch (err) {
+        debugR('%s(%s)', methodName, args.join(', '));
+    }
+    // TODO: deal with calls that don't specify a stream_id
     var originalArgs = args.slice(0);
     var cb = args.pop();
     var stream_id;
-    if (typeof cb === "function") {
+    if ((!cb) || (typeof cb === "function")) {
         stream_id = args.pop();
     } else {
         stream_id = cb;
     }
-    var f = this.buildFunction(this.getProtocol(stream_id), methodName);
+    var protocol = this.getProtocol(stream_id);
+    debugR('extracted stream_id: %s -> protocol: %s', stream_id, protocol);
+    var f = this.buildFunction(protocol, methodName);
     return f.apply(this, originalArgs);
 };
 
@@ -239,7 +250,8 @@ Client.prototype.reconnect = function (stream_id, cb) {
  * @api public
  */
 Client.prototype.use = function (fn) {
-    fn(this);
+    var coffea = methodMissing(this);
+    fn.call(coffea, coffea);
     return this;
 };
 
@@ -288,15 +300,16 @@ Client.prototype.onmessage = function (msg, network) {
  *
  * @api private
  */
-Client.prototype.fallbackCallback = function fallbackCallback(extend, event, fn, context) {
+Client.prototype._fallbackCallback = function _fallbackCallback(extend, event, fn, context) {
     var params = utils.getParamNames(fn);
     var func = fn;
+    var coffea = methodMissing(this);
     if (params.length === 1) {
-        func = function(err, event) {
-            fn(event, err);
+        func = function (err, event) {
+            fn.call(coffea, event, err);
         };
     }
-    extend.call(this, event, func, context);
+    extend.call(coffea, event, func, context);
 };
 
 /**
@@ -305,7 +318,7 @@ Client.prototype.fallbackCallback = function fallbackCallback(extend, event, fn,
  * @api private
  */
 Client.prototype.on = function on(event, fn, context) {
-    this.fallbackCallback(this.parent.on, event, fn, context);
+    this._fallbackCallback(this.parent.on, event, fn, context);
 };
 
 /**
@@ -314,5 +327,5 @@ Client.prototype.on = function on(event, fn, context) {
  * @api private
  */
 Client.prototype.once = function once(event, fn, context) {
-    this.fallbackCallback(this.parent.once, event, fn, context);
+    this._fallbackCallback(this.parent.once, event, fn, context);
 };
