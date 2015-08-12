@@ -127,6 +127,21 @@ Client.prototype._runConfig = function (config) {
         var stream = this._execProtocol(protocol, 'setup', config);
         var id = this._useStream(stream, config);
         this.connect(id);
+        var _this = this;
+        this.format.unhighlight = function formatUnhighlightMapper() {
+            if (_this.protocols[protocol].functions.hasOwnProperty('format.unhighlight')) {
+                return _this.protocols[protocol].functions['format.unhighlight']();
+            } else {
+                return ''; // disable formatting by default
+            }
+        };
+        this.format.get = function formatGetMapper() {
+            if (_this.protocols[protocol].functions.hasOwnProperty('format.get')) {
+                return _this.protocols[protocol].functions['format.get']();
+            } else {
+                return ''; // disable formatting by default
+            }
+        };
         return id;
     }
 };
