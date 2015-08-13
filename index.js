@@ -54,6 +54,25 @@ function Client(info, throttling) {
     this.loadPlugin(__dirname + '/lib/irc/index.js');
     debug("irc plugins loaded");
 
+    var _this = this;
+    if (!this.format) this.format = {};
+    this.format.unhighlight = function formatUnhighlightMapper(text, network) {
+        var protocol = _this.getProtocol(network);
+        if (_this.protocols[protocol].functions.hasOwnProperty('format.unhighlight')) {
+            return _this.protocols[protocol].functions['format.unhighlight'](text);
+        } else {
+            return ''; // disable formatting by default
+        }
+    };
+    this.format.get = function formatGetMapper(name, network) {
+        var protocol = _this.getProtocol(network);
+        if (_this.protocols[protocol].functions.hasOwnProperty('format.get')) {
+            return _this.protocols[protocol].functions['format.get'](name);
+        } else {
+            return ''; // disable formatting by default
+        }
+    };
+
     if (typeof info === 'boolean') {
         throttling = info;
         info = null;
@@ -127,21 +146,6 @@ Client.prototype._runConfig = function (config) {
         var stream = this._execProtocol(protocol, 'setup', config);
         var id = this._useStream(stream, config);
         this.connect(id);
-        var _this = this;
-        this.format.unhighlight = function formatUnhighlightMapper() {
-            if (_this.protocols[protocol].functions.hasOwnProperty('format.unhighlight')) {
-                return _this.protocols[protocol].functions['format.unhighlight']();
-            } else {
-                return ''; // disable formatting by default
-            }
-        };
-        this.format.get = function formatGetMapper() {
-            if (_this.protocols[protocol].functions.hasOwnProperty('format.get')) {
-                return _this.protocols[protocol].functions['format.get']();
-            } else {
-                return ''; // disable formatting by default
-            }
-        };
         return id;
     }
 };
