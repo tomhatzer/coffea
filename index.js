@@ -3,6 +3,7 @@
 
 var debug = require('debug')('core');
 var debugR = require('debug')('router');
+var debugC = require('debug')('config');
 
 var EventEmitter = require('eventemitter3');
 var net = require('net');
@@ -102,8 +103,10 @@ Client.prototype._execProtocol = function (protocol, cmd, arg1, arg2, arg3, arg4
 
 Client.prototype._parseConfig = function (config) {
     if (config instanceof Array) {
+        debugC("config array detected, loading %d configs", config.length);
         config = config.map(this._parseConfig, this);
     } else {
+        debugC("parsing config: %s", JSON.stringify(config));
         var p;
         if (typeof config === 'string') {
             p = config;
@@ -123,11 +126,27 @@ Client.prototype._parseConfig = function (config) {
 
         protocol = protocol ? protocol : 'irc';
 
-        config = this._execProtocol(protocol, 'parse', config, shortConfig);
-        config.protocol = protocol;
+        debugC("requires protocol '%s'", protocol);
+        if (!this.protocols.hasOwnProperty(protocol)) {
+            debugC("protocol '%s' not loaded yet, attempting to require and load 'coffea-%s'", protocol, protocol);
+            try {
+                this.loadPlugin('coffea-' + protocol);
+                if (!this.protocols.hasOwnProperty(protocol)) {
+                    throw new Error("'coffea-%s' required and loaded, but it doesn't handle the '%s' protocol.", protocol, protocol);
+                }
+                debugC("successfully loaded 'coffea-%s' on the fly", protocol);
+            } catch (err) {
+                throw new Error("Couldn't load 'coffea-" + protocol +"' plugin, try running `npm install coffea-" + protocol +"` (" + err.toString() + ")");
+            }
+        } else {
+            debugC("protocol '%s' available - using it to parse the config further", protocol);
+            debugC("%s input: config: %s - shortConfig: %s", protocol, JSON.stringify(config), JSON.stringify(shortConfig));
+            config = this._execProtocol(protocol, 'parse', config, shortConfig);
+            config.protocol = protocol;
+            debugC("%s output: %s", protocol, JSON.stringify(config));
+            return config;
+        }
     }
-
-    return config;
 };
 
 Client.prototype._runConfig = function (config) {
@@ -142,9 +161,9 @@ Client.prototype._runConfig = function (config) {
             debug("error: %s", errmsg);
             throw new Error(errmsg);
         }
-        debug("using protocol '%s' for '%s'", protocol, JSON.stringify(config));
         var stream = this._execProtocol(protocol, 'setup', config);
         var id = this._useStream(stream, config);
+        debug("used protocol '%s' for '%s'", protocol, id);
         this.connect(id);
         return id;
     }
