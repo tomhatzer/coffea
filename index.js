@@ -138,7 +138,6 @@ Client.prototype._parseConfig = function (config) {
             } catch (err) {
                 throw new Error("Couldn't load 'coffea-" + protocol +"' plugin, try running `npm install coffea-" + protocol +"` (" + err.toString() + ")");
             }
-            return;
         }
         debugC("protocol '%s' available - using it to parse the config further", protocol);
 
@@ -146,7 +145,7 @@ Client.prototype._parseConfig = function (config) {
         config = this._execProtocol(protocol, 'parse', config, shortConfig);
         config.protocol = protocol;
         debugC("%s output: %s", protocol, JSON.stringify(config));
-        
+
         return config;
     }
 };
