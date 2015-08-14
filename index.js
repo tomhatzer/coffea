@@ -165,7 +165,7 @@ Client.prototype._runConfig = function (config) {
         var stream = this._execProtocol(protocol, 'setup', config);
         var id = this._useStream(stream, config);
         debug("used protocol '%s' for '%s'", protocol, id);
-        this.connect(id);
+        this.__noSuchMethod__('connect', [id]);
         return id;
     }
 };
