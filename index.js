@@ -138,14 +138,16 @@ Client.prototype._parseConfig = function (config) {
             } catch (err) {
                 throw new Error("Couldn't load 'coffea-" + protocol +"' plugin, try running `npm install coffea-" + protocol +"` (" + err.toString() + ")");
             }
-        } else {
-            debugC("protocol '%s' available - using it to parse the config further", protocol);
-            debugC("%s input: config: %s - shortConfig: %s", protocol, JSON.stringify(config), JSON.stringify(shortConfig));
-            config = this._execProtocol(protocol, 'parse', config, shortConfig);
-            config.protocol = protocol;
-            debugC("%s output: %s", protocol, JSON.stringify(config));
-            return config;
+            return;
         }
+        debugC("protocol '%s' available - using it to parse the config further", protocol);
+
+        debugC("%s input: config: %s - shortConfig: %s", protocol, JSON.stringify(config), JSON.stringify(shortConfig));
+        config = this._execProtocol(protocol, 'parse', config, shortConfig);
+        config.protocol = protocol;
+        debugC("%s output: %s", protocol, JSON.stringify(config));
+        
+        return config;
     }
 };
 
