@@ -97,6 +97,22 @@ module.exports = Client;
 // inherit from Emitter.prototype to make Client and EventEmitter
 utils.inherit(Client, EventEmitter);
 
+Client.prototype.getInfo = function (network) {
+    return this.streams[network].info;
+};
+
+Client.prototype.splitString = function (text) {
+    var message = text.match(/\w+|"(?:\\"|[^"])+"/g);
+    message = message.map(function (m) {
+        if ((m.charAt(0) === '"') && (m.charAt(m.length - 1) === '"')) {
+            return m.substring(1, m.length - 1).split('\\').join("");
+            // .split.join is actually faster than .replace on v8: http://stackoverflow.com/a/1145525/702288
+        }
+        return m;
+    });
+    return message;
+};
+
 Client.prototype._execProtocol = function (protocol, cmd, arg1, arg2, arg3, arg4, arg5) {
     return this.protocols[protocol][cmd](arg1, arg2, arg3, arg4, arg5); // TODO: use `args...` in ES6
 };
