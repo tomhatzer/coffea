@@ -318,6 +318,21 @@ Client.prototype.add = function (info) {
 };
 
 /**
+ * Disconnect from specific network (stream) and delete Stream
+ * 
+ * @params {string} network
+ * @api public
+ */
+Client.prototype.delete = function(network) {
+    var _this = this;
+    if(network !== null && _this.streams[network]) {
+        _this.streams[network].write("QUIT", null);
+        _this.streams[network].destroy();
+        delete _this.streams[network];
+    }
+}
+
+/**
  * Write data to a specific network (stream)
  *
  * @params {string} str
